@@ -7,7 +7,7 @@ import concurrent.futures  # Biblioteca nativa do Python para processamento para
 
 # Configuração da página do site
 st.set_page_config(page_title="Corretor de Provas", page_icon="📝")
-st.title("📝 Corretor Automático de Gabaritos (Versão Turbo)")
+st.title("📝 Corretor Automático de Gabaritos")
 
 st.markdown("""
 Faça o upload das fotos das provas. O sistema usará Inteligência Artificial para identificar o nome do aluno, 
@@ -65,29 +65,36 @@ if st.button("Corrigir Provas", type="primary"):
         """
 
         # Função que corrige uma única prova (preparada para rodar várias vezes ao mesmo tempo)
+        # Função que corrige uma única prova (preparada para rodar várias vezes ao mesmo tempo)
         def corrigir_uma_prova(file):
             try:
                 img = Image.open(file)
                 # Reduzir a imagem para max 1024x1024
                 img.thumbnail((1024, 1024))
                 
-                response = model.generate_content([prompt, img])
-                texto_limpo = response.text.replace('```json', '').replace('```', '').strip()
-                dados = json.loads(texto_limpo)
+                # Pedimos para a IA gerar o conteúdo FORÇANDO o formato JSON
+                response = model.generate_content(
+                    [prompt, img],
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                
+                # Como forçamos o JSON, não precisamos mais "limpar" o texto
+                dados = json.loads(response.text)
                 
                 # REGRA DO EMOJI: Se a IA detectou múltiplas marcações, adiciona o alerta vermelho
                 if dados.get("multiplas_marcacoes") == True:
                     dados["nome_do_aluno"] = str(dados["nome_do_aluno"]) + " ❗"
                 
-                # Removemos a chave 'multiplas_marcacoes' para a tabela final do site continuar com 3 colunas limpas
+                # Removemos a chave 'multiplas_marcacoes' para a tabela final continuar bonita
                 if "multiplas_marcacoes" in dados:
                     del dados["multiplas_marcacoes"]
                     
                 return dados
+                
             except Exception as e:
-                # Se der erro em uma prova, não trava as outras
+                # Agora, se der erro, ele vai mostrar o MOTIVO exato do erro na tabela
                 return {
-                    "nome_do_aluno": f"Erro na foto: {file.name}", 
+                    "nome_do_aluno": f"Erro ({file.name}): {str(e)}", 
                     "respostas_do_aluno": "N/A", 
                     "total_acertos": 0
                 }
