@@ -51,14 +51,16 @@ if st.button("Corrigir Provas", type="primary"):
         
         Sua tarefa:
         1. Identifique o nome do aluno escrito na prova.
-        2. Verifique quais alternativas o aluno marcou.
+        2. Verifique quais alternativas o aluno marcou. Se o aluno marcou mais de uma alternativa em uma única questão, considere a questão como ERRADA.
         3. Compare com o gabarito oficial e conte os acertos.
+        4. Identifique se o aluno fez múltiplas marcações em alguma questão e sinalize no JSON.
         
-        Retorne APENAS um JSON válido com a seguinte estrutura:
+        Retorne APENAS um JSON válido com a seguinte estrutura exata:
         {{
             "nome_do_aluno": "Nome Encontrado",
-            "respostas_do_aluno": "1-A, 2-B...",
-            "total_acertos": 3
+            "respostas_do_aluno": "1-A, 2-B, 3-C,D...",
+            "total_acertos": 3,
+            "multiplas_marcacoes": true
         }}
         """
 
@@ -66,12 +68,22 @@ if st.button("Corrigir Provas", type="primary"):
         def corrigir_uma_prova(file):
             try:
                 img = Image.open(file)
-                # OTIMIZAÇÃO 1: Reduzir a imagem para max 1024x1024 (upload super rápido, sem perder a leitura)
+                # Reduzir a imagem para max 1024x1024
                 img.thumbnail((1024, 1024))
                 
                 response = model.generate_content([prompt, img])
                 texto_limpo = response.text.replace('```json', '').replace('```', '').strip()
-                return json.loads(texto_limpo)
+                dados = json.loads(texto_limpo)
+                
+                # REGRA DO EMOJI: Se a IA detectou múltiplas marcações, adiciona o alerta vermelho
+                if dados.get("multiplas_marcacoes") == True:
+                    dados["nome_do_aluno"] = str(dados["nome_do_aluno"]) + " ❗"
+                
+                # Removemos a chave 'multiplas_marcacoes' para a tabela final do site continuar com 3 colunas limpas
+                if "multiplas_marcacoes" in dados:
+                    del dados["multiplas_marcacoes"]
+                    
+                return dados
             except Exception as e:
                 # Se der erro em uma prova, não trava as outras
                 return {
