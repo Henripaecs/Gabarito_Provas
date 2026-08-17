@@ -3,7 +3,7 @@ import google.generativeai as genai
 from PIL import Image
 import pandas as pd
 import json
-import concurrent.futures  # Biblioteca nativa do Python para processamento paralelo
+import concurrent.futures
 
 # Configuração da página do site
 st.set_page_config(page_title="Corretor de Provas", page_icon="📝")
@@ -11,18 +11,18 @@ st.title("📝 Corretor Automático de Gabaritos")
 
 st.markdown("""
 Faça o upload das fotos das provas. O sistema usará Inteligência Artificial para identificar o nome do aluno, 
-ler as respostas e comparar com o gabarito oficial **simultaneamente**.
+ler as respostas e comparar com o gabarito oficial.
 """)
 
 # Barra lateral para configurações
 with st.sidebar:
     st.header("Configurações")
+    
     # Verifica se a chave está salva no cofre invisível do Streamlit
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("✅ Chave de API conectada automaticamente!")
     else:
-        # Se não achar a chave no cofre, pede para digitar (útil se você compartilhar o site)
         api_key = st.text_input("Sua Chave de API (Gemini):", type="password")
     
     gabarito_oficial = st.text_area(
@@ -44,6 +44,7 @@ if st.button("Corrigir Provas", type="primary"):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-3.6-flash') 
         
+        # PROMPT ATUALIZADO: Explicação super clara sobre o true e false
         prompt = f"""
         Você é um assistente de correção de provas. Analise a imagem em anexo.
         O gabarito oficial da prova é:
@@ -51,48 +52,45 @@ if st.button("Corrigir Provas", type="primary"):
         
         Sua tarefa:
         1. Identifique o nome do aluno escrito na prova.
-        2. Verifique quais alternativas o aluno marcou. Se o aluno marcou mais de uma alternativa em uma única questão, considere a questão como ERRADA.
+        2. Verifique as alternativas. Se houver mais de uma marcação na mesma questão, ela está ERRADA.
         3. Compare com o gabarito oficial e conte os acertos.
-        4. Identifique se o aluno fez múltiplas marcações em alguma questão e sinalize no JSON.
+        4. Verifique se o aluno fez múltiplas marcações.
         
-        Retorne APENAS um JSON válido com a seguinte estrutura exata:
+        Retorne APENAS um JSON válido com a seguinte estrutura:
         {{
             "nome_do_aluno": "Nome Encontrado",
-            "respostas_do_aluno": "1-A, 2-B, 3-C,D...",
+            "respostas_do_aluno": "1-A, 2-B...",
             "total_acertos": 3,
-            "multiplas_marcacoes": true
+            "multiplas_marcacoes": false
         }}
+        
+        IMPORTANTE: O campo "multiplas_marcacoes" deve ser true SE o aluno marcou mais de uma opção na mesma questão, e false se estiver tudo normal (apenas uma marcação por questão).
         """
 
-        # Função que corrige uma única prova (preparada para rodar várias vezes ao mesmo tempo)
-        # Função que corrige uma única prova (preparada para rodar várias vezes ao mesmo tempo)
         def corrigir_uma_prova(file):
             try:
                 img = Image.open(file)
-                # Reduzir a imagem para max 1024x1024
                 img.thumbnail((1024, 1024))
                 
-                # Pedimos para a IA gerar o conteúdo FORÇANDO o formato JSON
+                # Forçando o formato JSON para evitar erros de leitura
                 response = model.generate_content(
                     [prompt, img],
                     generation_config={"response_mime_type": "application/json"}
                 )
                 
-                # Como forçamos o JSON, não precisamos mais "limpar" o texto
                 dados = json.loads(response.text)
                 
-                # REGRA DO EMOJI: Se a IA detectou múltiplas marcações, adiciona o alerta vermelho
+                # REGRA DO EMOJI
                 if dados.get("multiplas_marcacoes") == True:
                     dados["nome_do_aluno"] = str(dados["nome_do_aluno"]) + " ❗"
                 
-                # Removemos a chave 'multiplas_marcacoes' para a tabela final continuar bonita
+                # Limpa a coluna extra antes de ir para a tabela
                 if "multiplas_marcacoes" in dados:
                     del dados["multiplas_marcacoes"]
                     
                 return dados
                 
             except Exception as e:
-                # Agora, se der erro, ele vai mostrar o MOTIVO exato do erro na tabela
                 return {
                     "nome_do_aluno": f"Erro ({file.name}): {str(e)}", 
                     "respostas_do_aluno": "N/A", 
@@ -102,25 +100,19 @@ if st.button("Corrigir Provas", type="primary"):
         resultados = []
         progress_bar = st.progress(0)
         
-        with st.spinner('Analisando todas as imagens simultaneamente...'):
-            # OTIMIZAÇÃO 2: Executa até 5 correções ao mesmo tempo em paralelo
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                # Dispara todas as tarefas de uma vez
+        with st.spinner('Analisando as imagens...'):
+            # Reduzimos de 5 para 2 para o Google não bloquear a sua chave gratuita por excesso de velocidade
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(corrigir_uma_prova, file) for file in uploaded_files]
                 
-                # Conforme as respostas vão chegando, atualiza a barra e salva
                 for i, future in enumerate(concurrent.futures.as_completed(futures)):
                     resultados.append(future.result())
                     progress_bar.progress((i + 1) / len(uploaded_files))
 
-        # Mostrar os resultados em uma tabela
         if resultados:
-            st.success("Correção finalizada na velocidade da luz! ⚡")
+            st.success("Correção finalizada com sucesso! ⚡")
             df = pd.DataFrame(resultados)
-            
-            # Renomear colunas
             df.columns = ["Nome do Aluno", "Respostas do Aluno", "Total de Acertos"]
-            
             st.dataframe(df, use_container_width=True)
             
             csv = df.to_csv(index=False).encode('utf-8')
