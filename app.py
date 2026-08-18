@@ -25,14 +25,13 @@ st.title("📝 Corretor Automático de Gabaritos")
 with st.sidebar:
     st.header("Configurações do Sistema")
     
-    try:
-        if "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ Chave conectada!")
-        else:
-            api_key = st.text_input("Sua Chave de API:", type="password")
-    except Exception:
-        api_key = st.text_input("Sua Chave de API:", type="password")
+    # Busca exclusiva nos Secrets (Pronto para Nuvem)
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("✅ Chave conectada via Secrets!")
+    else:
+        st.error("⚠️ Chave de API não encontrada nos Secrets do Streamlit Cloud.")
+        api_key = None
     
     st.divider()
     
@@ -99,7 +98,7 @@ with aba_nova_correcao:
 
     if st.button("Corrigir Provas", type="primary"):
         if not api_key:
-            st.error("Por favor, informe a Chave de API na barra lateral.")
+            st.error("Por favor, configure a chave nos Secrets para iniciar.")
         elif not uploaded_files:
             st.warning("Envie ao menos uma foto para iniciar a correção.")
         else:
@@ -187,7 +186,6 @@ with aba_nova_correcao:
                 df = pd.DataFrame(resultados)
                 st.dataframe(df, use_container_width=True)
                 
-                # --- PREPARAÇÃO DO EXCEL E SALVAMENTO NO HISTÓRICO ---
                 df_excel = df.copy()
                 df_excel["Nota Final"] = df_excel["Nota Final"].astype(object)
                 
@@ -201,7 +199,6 @@ with aba_nova_correcao:
                         acertos_originais = df.at[i, "Total de Acertos"]
                         df_excel.at[i, "Nota Final"] = f"={nota_original}+((C{linha_excel}-{acertos_originais})*{media_pts})"
                 
-                # Gera o nome de arquivo seguro e único com data/hora
                 nome_arquivo_seguro = "".join([c for c in nome_turma if c.isalnum() or c == ' ']).strip().replace(' ', '_')
                 data_hora = datetime.now().strftime("%d-%m-%Y_%H-%M")
                 nome_final = f"Notas_{nome_arquivo_seguro}_{data_hora}"
@@ -209,11 +206,9 @@ with aba_nova_correcao:
                 caminho_csv = os.path.join(PASTA_HISTORICO, f"{nome_final}.csv")
                 caminho_xlsx = os.path.join(PASTA_HISTORICO, f"{nome_final}.xlsx")
                 
-                # Salva no computador automaticamente para o Histórico ler depois
                 df.to_csv(caminho_csv, index=False)
                 df_excel.to_excel(caminho_xlsx, index=False, sheet_name=nome_turma[:31])
                 
-                # Botão de download imediato
                 with open(caminho_xlsx, "rb") as file:
                     st.download_button(
                         label="📥 Baixar Planilha Excel Oficial",
@@ -228,13 +223,11 @@ with aba_nova_correcao:
 # ==========================================
 with aba_historico:
     st.subheader("📂 Correções Salvas Anteriormente")
-    st.markdown("Aqui você encontra todas as turmas que já foram corrigidas neste computador. Escolha um arquivo para visualizar e baixar.")
+    st.markdown("Aqui você encontra todas as turmas corrigidas na sessão atual.")
     
-    # Busca os arquivos dentro da pasta Historico_Corretor
     arquivos_salvos = [f for f in os.listdir(PASTA_HISTORICO) if f.endswith('.csv')]
     
     if arquivos_salvos:
-        # Reverte a lista para mostrar as mais recentes primeiro
         arquivos_salvos.sort(reverse=True)
         
         turma_selecionada = st.selectbox("Selecione uma turma corrigida:", arquivos_salvos, format_func=lambda x: x.replace(".csv", "").replace("_", " "))
@@ -243,11 +236,9 @@ with aba_historico:
             caminho_csv = os.path.join(PASTA_HISTORICO, turma_selecionada)
             caminho_xlsx = caminho_csv.replace(".csv", ".xlsx")
             
-            # Carrega e exibe a tabela antiga
             df_historico = pd.read_csv(caminho_csv)
             st.dataframe(df_historico, use_container_width=True)
             
-            # Permite baixar o Excel original dessa turma de novo
             if os.path.exists(caminho_xlsx):
                 with open(caminho_xlsx, "rb") as f:
                     st.download_button(
@@ -258,4 +249,4 @@ with aba_historico:
                         key="btn_historico"
                     )
     else:
-        st.info("Nenhuma correção foi salva ainda. Use a aba 'Nova Correção' para analisar sua primeira turma!")
+        st.info("Nenhuma correção foi salva ainda nesta sessão.")
