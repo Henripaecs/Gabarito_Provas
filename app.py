@@ -5,110 +5,257 @@ import pandas as pd
 import json
 import time
 import concurrent.futures
+import io
+import string
+import os
+from datetime import datetime
 
-st.set_page_config(page_title="Corretor de Provas", page_icon="📝")
+# Configuração da página
+st.set_page_config(page_title="Corretor de Gabaritos", page_icon="📝", layout="wide")
+
+# --- SISTEMA DE ARQUIVOS PARA O HISTÓRICO ---
+PASTA_HISTORICO = "Historico_Corretor"
+if not os.path.exists(PASTA_HISTORICO):
+    os.makedirs(PASTA_HISTORICO)
+
+# Título Principal
 st.title("📝 Corretor Automático de Gabaritos")
 
+# --- BARRA LATERAL: Configurações Gerais ---
 with st.sidebar:
-    st.header("Configurações")
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("✅ Chave conectada automaticamente!")
-    else:
+    st.header("Configurações do Sistema")
+    
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ Chave conectada!")
+        else:
+            api_key = st.text_input("Sua Chave de API:", type="password")
+    except Exception:
         api_key = st.text_input("Sua Chave de API:", type="password")
     
-    gabarito_oficial = st.text_area("Gabarito Oficial", value="1-A\n2-B\n3-C\n4-D\n5-A")
+    st.divider()
+    
+    st.subheader("Dados da Avaliação")
+    nome_turma = st.text_input("Nome da Turma:", value="1º Ano A")
+    num_questoes = st.number_input("Quantidade de Questões:", min_value=1, max_value=100, value=5, step=1)
+    num_alternativas = st.number_input("Alternativas por Questão (Ex: 5 = A até E):", min_value=2, max_value=10, value=5, step=1)
+    
+    tipo_pontuacao = st.radio(
+        "Distribuição de Pontos:",
+        ["Mesma pontuação para todas", "Pontuação individual por questão"]
+    )
+    
+    valor_padrao = 1.0
+    if tipo_pontuacao == "Mesma pontuação para todas":
+        valor_padrao = st.number_input("Valor de cada questão (pts):", min_value=0.1, value=1.0, step=0.5)
 
-uploaded_files = st.file_uploader("Arraste as fotos das provas aqui", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+# --- CRIAÇÃO DAS ABAS (TABS) ---
+aba_nova_correcao, aba_historico = st.tabs(["🚀 Nova Correção", "📂 Histórico de Turmas"])
 
-if st.button("Corrigir Provas", type="primary"):
-    if not api_key or not uploaded_files:
-        st.warning("Preencha a chave e envie as fotos.")
-    else:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-3.6-flash') 
-        
-        prompt = f"""
-        Você é um assistente de correção de provas. Analise a imagem.
-        Gabarito oficial:
-        {gabarito_oficial}
-        
-        Sua tarefa:
-        1. Identifique o nome do aluno.
-        2. Verifique as alternativas. Se houver mais de uma marcação na mesma questão, ela está ERRADA.
-        3. Compare com o gabarito oficial e conte os acertos.
-        
-        Retorne APENAS um JSON válido com esta estrutura:
-        {{
-            "nome_do_aluno": "Nome",
-            "respostas_do_aluno": "1-A, 2-B...",
-            "total_acertos": 3,
-            "multiplas_marcacoes": false
-        }}
-        
-        Regra de ouro: O campo "multiplas_marcacoes" DEVE ser true se o aluno marcou mais de uma opção na mesma questão. Caso contrário, retorne false.
-        """
+# ==========================================
+# ABA 1: NOVA CORREÇÃO
+# ==========================================
+with aba_nova_correcao:
+    st.subheader("🎯 Gabarito Oficial e Pontuações")
+    st.markdown("Marque a alternativa correta e defina a pontuação correspondente para cada questão:")
 
-        def corrigir_uma_prova(file):
-            max_tentativas = 3
+    gabarito_oficial_dict = {}
+    pesos_questoes_dict = {}
+    alternativas = list(string.ascii_uppercase)[:num_alternativas]
+    alternativas_texto = ", ".join(alternativas[:-1]) + " ou " + alternativas[-1] if len(alternativas) > 1 else alternativas[0]
+
+    with st.container():
+        for q in range(1, num_questoes + 1):
+            if tipo_pontuacao == "Pontuação individual por questão":
+                col_label, col_radio, col_pts = st.columns([1, 4, 2])
+            else:
+                col_label, col_radio = st.columns([1, 6])
             
-            for tentativa in range(max_tentativas):
-                try:
-                    img = Image.open(file)
-                    img.thumbnail((1024, 1024))
-                    
-                    response = model.generate_content(
-                        [prompt, img],
-                        generation_config={"response_mime_type": "application/json"}
-                    )
-                    
-                    dados = json.loads(response.text)
-                    
-                    # Coloca o emoji vermelho se teve múltipla marcação
-                    if dados.get("multiplas_marcacoes") == True:
-                        dados["nome_do_aluno"] = str(dados["nome_do_aluno"]) + " ❗"
-                    
-                    # Limpa a coluna extra
-                    if "multiplas_marcacoes" in dados:
-                        del dados["multiplas_marcacoes"]
-                        
-                    return dados
-                    
-                except Exception as e:
-                    erro = str(e)
-                    # SE O ERRO FOR O LIMITE DO GOOGLE (429)
-                    if "429" in erro:
-                        if tentativa < max_tentativas - 1:
-                            # O código dorme por 32 segundos e tenta a mesma foto de novo!
-                            time.sleep(32)
-                            continue
-                        else:
-                            return {"nome_do_aluno": f"Erro: Limite do Google atingido", "respostas_do_aluno": "N/A", "total_acertos": 0}
-                    else:
-                        return {"nome_do_aluno": f"Erro: {erro}", "respostas_do_aluno": "N/A", "total_acertos": 0}
-
-        resultados = []
-        progress_bar = st.progress(0)
-        
-        with st.spinner('Analisando imagens (O sistema fará pausas automáticas se necessário)...'):
-            # Enviamos no máximo 2 por vez para não assustar o servidor do Google
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                futures = [executor.submit(corrigir_uma_prova, file) for file in uploaded_files]
+            with col_label:
+                st.markdown(f"**Q{q}:**")
                 
-                for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                    resultados.append(future.result())
-                    progress_bar.progress((i + 1) / len(uploaded_files))
+            with col_radio:
+                escolha = st.radio(
+                    f"Opção Q{q}",
+                    alternativas,
+                    horizontal=True,
+                    key=f"q_{q}",
+                    label_visibility="collapsed"
+                )
+                gabarito_oficial_dict[f"{q}"] = escolha
+                
+            if tipo_pontuacao == "Pontuação individual por questão":
+                with col_pts:
+                    pts = st.number_input(f"Pts Q{q}", min_value=0.1, value=1.0, step=0.5, key=f"pts_{q}", label_visibility="collapsed")
+                    pesos_questoes_dict[f"{q}"] = pts
+            else:
+                pesos_questoes_dict[f"{q}"] = valor_padrao
 
-        if resultados:
-            st.success("Correção finalizada!")
-            df = pd.DataFrame(resultados)
-            df.columns = ["Nome do Aluno", "Respostas do Aluno", "Total de Acertos"]
-            st.dataframe(df, use_container_width=True)
+    st.divider()
+
+    st.subheader("📁 Upload das Folhas de Resposta")
+    uploaded_files = st.file_uploader("Selecione as fotos dos gabaritos", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+
+    if st.button("Corrigir Provas", type="primary"):
+        if not api_key:
+            st.error("Por favor, informe a Chave de API na barra lateral.")
+        elif not uploaded_files:
+            st.warning("Envie ao menos uma foto para iniciar a correção.")
+        else:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-3.6-flash')
             
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Baixar Planilha de Notas",
-                data=csv,
-                file_name='notas_alunos.csv',
-                mime='text/csv',
-            )
+            gabarito_texto = "\n".join([f"{k}-{v}" for k, v in gabarito_oficial_dict.items()])
+            
+            prompt = f"""
+            Você é um assistente de correção de provas. Analise a imagem em anexo.
+            O gabarito oficial com o total de questões é:
+            {gabarito_texto}
+            
+            Sua tarefa:
+            1. Identifique o nome do aluno escrito na folha.
+            2. Identifique quais alternativas ({alternativas_texto}) o aluno marcou para cada questão numerada.
+            3. Se o aluno marcou mais de uma opção, considere a questão como 'DUPLA'.
+            4. Retorne a lista com a resposta exata.
+            
+            Retorne APENAS um JSON com esta estrutura exata:
+            {{
+                "nome_do_aluno": "Nome Encontrado",
+                "respostas": {{"1": "A", "2": "B"}},
+                "multiplas_marcacoes": false
+            }}
+            
+            Regra: "multiplas_marcacoes" deve ser true se houver qualquer marcação dupla/rasura, caso contrário false.
+            """
+
+            def processar_gabarito(file):
+                max_tentativas = 3
+                for tentativa in range(max_tentativas):
+                    try:
+                        img = Image.open(file)
+                        img.thumbnail((1024, 1024))
+                        response = model.generate_content([prompt, img], generation_config={"response_mime_type": "application/json"})
+                        
+                        dados = json.loads(response.text)
+                        nome = dados.get("nome_do_aluno", "Nome não identificado")
+                        respostas_aluno = dados.get("respostas", {})
+                        teve_multiplas = dados.get("multiplas_marcacoes", False)
+                        
+                        total_acertos = 0
+                        nota_calculada = 0.0
+                        resumo_respostas = []
+                        
+                        for q_num, alt_correta in gabarito_oficial_dict.items():
+                            resp = str(respostas_aluno.get(q_num, "-")).upper().strip()
+                            resumo_respostas.append(f"{q_num}-{resp}")
+                            
+                            if resp == alt_correta:
+                                total_acertos += 1
+                                nota_calculada += pesos_questoes_dict.get(q_num, 0.0)
+                        
+                        if teve_multiplas:
+                            nome = f"{nome} ❗"
+                            
+                        return {
+                            "Nome do Aluno": nome,
+                            "Respostas do Aluno": ", ".join(resumo_respostas),
+                            "Total de Acertos": total_acertos,
+                            "Nota Final": round(nota_calculada, 2)
+                        }
+                        
+                    except Exception as e:
+                        if "429" in str(e):
+                            if tentativa < max_tentativas - 1:
+                                time.sleep(32)
+                                continue
+                            return {"Nome do Aluno": f"Erro: Limite da API", "Respostas do Aluno": "N/A", "Total de Acertos": 0, "Nota Final": 0.0}
+                        return {"Nome do Aluno": f"Erro: {str(e)}", "Respostas do Aluno": "N/A", "Total de Acertos": 0, "Nota Final": 0.0}
+
+            resultados = []
+            progress_bar = st.progress(0)
+            
+            with st.spinner(f'Processando correções para: {nome_turma}...'):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [executor.submit(processar_gabarito, file) for file in uploaded_files]
+                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                        resultados.append(future.result())
+                        progress_bar.progress((i + 1) / len(uploaded_files))
+
+            if resultados:
+                st.success("🎉 Todas as provas foram corrigidas!")
+                df = pd.DataFrame(resultados)
+                st.dataframe(df, use_container_width=True)
+                
+                # --- PREPARAÇÃO DO EXCEL E SALVAMENTO NO HISTÓRICO ---
+                df_excel = df.copy()
+                df_excel["Nota Final"] = df_excel["Nota Final"].astype(object)
+                
+                for i in range(len(df_excel)):
+                    linha_excel = i + 2 
+                    if tipo_pontuacao == "Mesma pontuação para todas":
+                        df_excel.at[i, "Nota Final"] = f"=C{linha_excel}*{valor_padrao}"
+                    else:
+                        media_pts = sum(pesos_questoes_dict.values()) / len(pesos_questoes_dict)
+                        nota_original = df.at[i, "Nota Final"]
+                        acertos_originais = df.at[i, "Total de Acertos"]
+                        df_excel.at[i, "Nota Final"] = f"={nota_original}+((C{linha_excel}-{acertos_originais})*{media_pts})"
+                
+                # Gera o nome de arquivo seguro e único com data/hora
+                nome_arquivo_seguro = "".join([c for c in nome_turma if c.isalnum() or c == ' ']).strip().replace(' ', '_')
+                data_hora = datetime.now().strftime("%d-%m-%Y_%H-%M")
+                nome_final = f"Notas_{nome_arquivo_seguro}_{data_hora}"
+                
+                caminho_csv = os.path.join(PASTA_HISTORICO, f"{nome_final}.csv")
+                caminho_xlsx = os.path.join(PASTA_HISTORICO, f"{nome_final}.xlsx")
+                
+                # Salva no computador automaticamente para o Histórico ler depois
+                df.to_csv(caminho_csv, index=False)
+                df_excel.to_excel(caminho_xlsx, index=False, sheet_name=nome_turma[:31])
+                
+                # Botão de download imediato
+                with open(caminho_xlsx, "rb") as file:
+                    st.download_button(
+                        label="📥 Baixar Planilha Excel Oficial",
+                        data=file,
+                        file_name=f"{nome_final}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+
+# ==========================================
+# ABA 2: HISTÓRICO DE TURMAS
+# ==========================================
+with aba_historico:
+    st.subheader("📂 Correções Salvas Anteriormente")
+    st.markdown("Aqui você encontra todas as turmas que já foram corrigidas neste computador. Escolha um arquivo para visualizar e baixar.")
+    
+    # Busca os arquivos dentro da pasta Historico_Corretor
+    arquivos_salvos = [f for f in os.listdir(PASTA_HISTORICO) if f.endswith('.csv')]
+    
+    if arquivos_salvos:
+        # Reverte a lista para mostrar as mais recentes primeiro
+        arquivos_salvos.sort(reverse=True)
+        
+        turma_selecionada = st.selectbox("Selecione uma turma corrigida:", arquivos_salvos, format_func=lambda x: x.replace(".csv", "").replace("_", " "))
+        
+        if turma_selecionada:
+            caminho_csv = os.path.join(PASTA_HISTORICO, turma_selecionada)
+            caminho_xlsx = caminho_csv.replace(".csv", ".xlsx")
+            
+            # Carrega e exibe a tabela antiga
+            df_historico = pd.read_csv(caminho_csv)
+            st.dataframe(df_historico, use_container_width=True)
+            
+            # Permite baixar o Excel original dessa turma de novo
+            if os.path.exists(caminho_xlsx):
+                with open(caminho_xlsx, "rb") as f:
+                    st.download_button(
+                        label="📥 Re-baixar Planilha Excel",
+                        data=f,
+                        file_name=turma_selecionada.replace(".csv", ".xlsx"),
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_historico"
+                    )
+    else:
+        st.info("Nenhuma correção foi salva ainda. Use a aba 'Nova Correção' para analisar sua primeira turma!")
